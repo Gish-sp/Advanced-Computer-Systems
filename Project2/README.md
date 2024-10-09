@@ -217,6 +217,6 @@ Results (the multiplication of these matrices took quite some time, so I only ra
 ![alt text](image-9.png)
 
 ## Conclusion
-After experimenting with differnt matrix optimizations, we realize that the more sparse a matrix is, the faster it can be multiplied. Additionally, although cache miss optimization on its own is a slow process, when combined with SIMD and multithreaded optimizations, it becomes the fastest process of multiplying matrices.
+After experimenting with different matrix optimizations, we realize that the more sparse a matrix is, the faster it can be multiplied. Additionally, although cache miss optimization on its own is a slow process, when combined with SIMD and multithreaded optimizations, it becomes the fastest process of multiplying matrices.
 
-Native matrix multiplication should be avoided as much as possible, as it has the slowest possible runtime. Parralizing through multithreading is a way to speed up native multiplication, but it is still relatively slow in comparison to SIMD when used as a standalone process. Where matrix optimization truly thrives is when combining optimization methods.
+Native matrix multiplication should be avoided as much as possible, as it has the slowest possible runtime. Parallelizing through multithreading is a way to speed up native multiplication, but it is still relatively slow in comparison to SIMD when used as a standalone process. Where matrix optimization truly thrives is when combining optimization methods.
