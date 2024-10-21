@@ -1,0 +1,17 @@
+[global]
+name=randread
+rw=randread
+bs=16k
+iodepth=32
+numjobs=1
+direct=1
+group_reporting
+time_based
+runtime=30
+
+[job1]
+
+filename=/dev/nvme0n1p4 
+
+
+
