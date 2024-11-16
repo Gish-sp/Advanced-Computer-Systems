@@ -40,6 +40,7 @@ struct EncodedColumn {
     std::vector<int> encoded_data;
 };
 
+// Thread worker for encoding chunks
 void encodeChunk(
     const std::vector<std::string>& input_data, 
     size_t start, 
@@ -59,24 +60,27 @@ void encodeChunk(
     }
 }
 
-// merge local dictionaries into the global dictionary
+// Merge local dictionaries into the global dictionary
 void mergeDictionaries(
     const std::unordered_map<std::string, int>& local_dict, 
     const std::vector<std::string>& local_id_to_data, 
     Dictionary& global_dict, 
+    std::unordered_map<int, int>& local_to_global_map, 
     std::mutex& global_mutex) {
 
-    for (const auto& pair : local_dict) {
+    for (size_t local_id = 0; local_id < local_id_to_data.size(); ++local_id) {
+        const std::string& item = local_id_to_data[local_id];
         std::lock_guard<std::mutex> lock(global_mutex);
-        if (global_dict.data_to_id.find(pair.first) == global_dict.data_to_id.end()) {
+        if (global_dict.data_to_id.find(item) == global_dict.data_to_id.end()) {
             int global_id = static_cast<int>(global_dict.id_to_data.size());
-            global_dict.data_to_id[pair.first] = global_id;
-            global_dict.id_to_data.push_back(pair.first);
+            global_dict.data_to_id[item] = global_id;
+            global_dict.id_to_data.push_back(item);
         }
+        local_to_global_map[local_id] = global_dict.data_to_id[item];
     }
 }
 
-//  dictionary encoding with multithreading
+// Perform dictionary encoding with multithreading
 EncodedColumn encodeDictionary(const std::vector<std::string>& input_data, int num_threads) {
     size_t data_size = input_data.size();
     EncodedColumn encoded_column;
@@ -108,23 +112,23 @@ EncodedColumn encodeDictionary(const std::vector<std::string>& input_data, int n
         }
     }
 
-    // wait for all threads to complete
+    // Wait for all threads to complete
     for (auto& thread : threads) {
         thread.join();
     }
 
-
+    // Merge local dictionaries into the global dictionary
     std::mutex global_mutex;
+    std::vector<std::unordered_map<int, int>> local_to_global_maps(num_threads);
     for (int t = 0; t < num_threads; ++t) {
-        mergeDictionaries(local_dicts[t], local_id_to_data[t], encoded_column.dictionary, global_mutex);
+        mergeDictionaries(local_dicts[t], local_id_to_data[t], encoded_column.dictionary, local_to_global_maps[t], global_mutex);
     }
 
-    // update encoded data with global IDs
+    // Remap encoded data with global IDs
     for (int t = 0; t < num_threads; ++t) {
         size_t start = t * chunk_size;
         for (size_t i = 0; i < local_encoded_chunks[t].size(); ++i) {
-            const auto& local_item = local_id_to_data[t][local_encoded_chunks[t][i]];
-            encoded_column.encoded_data[start + i] = encoded_column.dictionary.data_to_id[local_item];
+            encoded_column.encoded_data[start + i] = local_to_global_maps[t][local_encoded_chunks[t][i]];
         }
     }
 
@@ -212,7 +216,7 @@ std::vector<std::pair<std::string, std::vector<int>>> vanillaPrefixQuery(const E
 
 
 // SIMD for singular item
-std::vector<int> simdQueryEncodedColumn(const EncodedColumn& encoded_column, const std::string& query) {
+std::vector<int> simdQuery(const EncodedColumn& encoded_column, const std::string& query) {
     std::vector<int> indices;
 
     // check if the query exists in the dictionary
@@ -311,18 +315,17 @@ void writeEncodedColumnToFile(const EncodedColumn& encoded_column, const std::st
 }
 
 
-
 int main() {
     std::string input_file = "Column.txt";
     std::string output_file = "encoded_data.txt";
     int num_threads ; 
     std::cout << "How many threads do you want for multithread encoding?" << std::endl;
     std::cin >> num_threads;
-    auto raw_data = readColumnFromFile(input_file);
+    auto data = readColumnFromFile(input_file);
 
     Timer timer;
     timer.start();
-    auto encoded_column = encodeDictionary(raw_data, num_threads);
+    auto encoded_column = encodeDictionary(data, num_threads);
     std::cout << "Encoding time: " << timer.elapsed() << " ms\n";
 
     writeEncodedColumnToFile(encoded_column, output_file);
@@ -340,45 +343,52 @@ int main() {
             std::string query; 
             std::cout << "Please enter a query for what you want to search for" << std::endl;
             std::cin >> query;
+
+            // SIMD Single Query Test
+            std::cout << "\nTesting SIMD Single Query for: " << query << std::endl;
             timer.start();
-            auto results = simdQueryEncodedColumn(encoded_column, query);
+            auto simd_single_results = simdQuery(encoded_column, query);
             std::cout << "SIMD single search query time: " << timer.elapsed() << " ms\n";
-
-            timer.start();
-            auto resultsVanil = vanillaSearch(encoded_column, query);
-            std::cout << "Vanilla single search query time: " << timer.elapsed() << " ms\n";
-
-
-            std::cout << "SIMD Indices for query '" << query << "': ";
-            for (int index : results) {
-                std::cout << index << " ";
+            std::cout << "SIMD Single Query Results: ";
+            for (int idx : simd_single_results) {
+                std::cout << idx << " ";
             }
-            std::cout << "\n";
+            std::cout << std::endl;
 
+            // Vanilla Single Query Test
+            std::cout << "\nTesting Vanilla Single Query for: " << query << std::endl;
+            timer.start();
+            auto vanilla_single_results = vanillaSearch(encoded_column, query);
+            std::cout << "Vanilla single search query time: " << timer.elapsed() << " ms\n";
 
         }
         else if (selection == "p"){
             std::string prefix ; 
             std::cout << "Type your prefix" << std::endl;
             std::cin >> prefix;
-
+            // SIMD Prefix Query Test
+            std::cout << "\nTesting SIMD Prefix Query for prefix: " << prefix << std::endl;
             timer.start();
             auto simd_prefix_results = simdPrefixQuery(encoded_column, prefix);
             std::cout << "SIMD Prefix query time: " << timer.elapsed() << " ms\n";
-
-            timer.start();
-            auto vanilla_prefix_results = vanillaPrefixQuery(encoded_column, prefix);
-            std::cout << "Vanilla Prefix query time: " << timer.elapsed() << " ms\n";
-
-            // results of the SIMD prefix query
-            std::cout << "SIMD Prefix query results for prefix '" << prefix << "':\n";
-            for (const auto& [data, indices] : simd_prefix_results) {
-                std::cout << "Data: " << data << " with indices: ";
-                for (int index : indices) {
-                    std::cout << index << " ";
+            std::cout << "SIMD Prefix Query Results: ";
+            for (const auto& result : simd_prefix_results) {
+                const std::string& dict_entry = result.first;  // Get the dictionary entry (string)
+                const std::vector<int>& indices = result.second;  // Get the list of indices
+                std::cout << "Data: " << dict_entry << " with indices: ";
+                for (int idx : indices) {
+                    std::cout << idx << " ";
                 }
                 std::cout << "\n";
             }
+            std::cout << std::endl;
+
+            // Vanilla Prefix Query Test
+            std::cout << "\nTesting Vanilla Prefix Query for prefix: " << prefix << std::endl;
+            timer.start();
+            auto vanilla_prefix_results = vanillaPrefixQuery(encoded_column, prefix);
+            std::cout << "Vanilla prefix query time: " << timer.elapsed() << " ms\n";
+
         }
     }
 
