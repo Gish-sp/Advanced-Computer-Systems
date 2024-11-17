@@ -146,35 +146,38 @@ std::vector<std::pair<std::string, std::vector<int>>> simdPrefixQuery(const Enco
         return results;
     }
 
+    const auto& dict_entries = encoded_column.dictionary.id_to_data;
+
+    // Precompute prefix mask for the first `prefix_length` bytes
+    int prefix_mask = (1 << prefix_length) - 1;
+
     // Load the prefix into a 256-bit SIMD register
     __m256i prefix_vec = _mm256_setzero_si256();
     std::memcpy(&prefix_vec, prefix.c_str(), std::min(prefix_length, size_t(32)));
 
-    const auto& dict_entries = encoded_column.dictionary.id_to_data;
-
-    // Process dictionary in batches of 8 for SIMD acceleration
+    // Process dictionary in chunks of 8 entries for SIMD acceleration
     size_t i = 0;
     for (; i + 8 <= dict_entries.size(); i += 8) {
-        __m256i dict_vecs[8];
+        alignas(32) char dict_buffer[8][32] = {0}; // Buffer to hold 8 dictionary entries
 
-        // Load 8 dictionary entries into SIMD registers
+        // Prepare dictionary entries for SIMD comparison
         for (int j = 0; j < 8; ++j) {
             const auto& dict_entry = dict_entries[i + j];
-            dict_vecs[j] = _mm256_setzero_si256();
-            std::memcpy(&dict_vecs[j], dict_entry.c_str(), std::min(dict_entry.size(), size_t(32)));
+            std::memcpy(dict_buffer[j], dict_entry.c_str(), std::min(dict_entry.size(), size_t(32)));
         }
 
         // Compare each dictionary entry with the prefix
         for (int j = 0; j < 8; ++j) {
-            __m256i cmp = _mm256_cmpeq_epi8(prefix_vec, dict_vecs[j]);
+            __m256i dict_vec = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dict_buffer[j]));
+            __m256i cmp = _mm256_cmpeq_epi8(prefix_vec, dict_vec);
             int mask = _mm256_movemask_epi8(cmp);
 
             // Check if the first `prefix_length` bytes match
-            if ((mask & ((1 << prefix_length) - 1)) == ((1 << prefix_length) - 1)) {
+            if ((mask & prefix_mask) == prefix_mask) {
                 const std::string& dict_entry = dict_entries[i + j];
                 std::vector<int> indices;
 
-                // Find all indices where this dictionary entry appears in the encoded data
+                // Efficiently find indices in encoded data where this dictionary entry appears
                 for (size_t k = 0; k < encoded_column.encoded_data.size(); ++k) {
                     if (encoded_column.encoded_data[k] == static_cast<int>(i + j)) {
                         indices.push_back(k);
@@ -186,12 +189,10 @@ std::vector<std::pair<std::string, std::vector<int>>> simdPrefixQuery(const Enco
         }
     }
 
-    // Handle remaining dictionary entries (scalar processing)
+    // Handle remaining dictionary entries that do not fit into chunks of 8
     for (; i < dict_entries.size(); ++i) {
-        const std::string& dict_entry = dict_entries[i];
-
-        if (dict_entry.size() >= prefix_length &&
-            std::memcmp(dict_entry.c_str(), prefix.c_str(), prefix_length) == 0) {
+        const auto& dict_entry = dict_entries[i];
+        if (dict_entry.size() >= prefix_length && dict_entry.compare(0, prefix_length, prefix) == 0) {
             std::vector<int> indices;
 
             for (size_t k = 0; k < encoded_column.encoded_data.size(); ++k) {
@@ -216,9 +217,12 @@ std::vector<std::string> vanillaPrefixQuery(const std::vector<std::string>& data
     std::vector<std::string> results;
     size_t prefix_length = prefix.size();
 
-    // Iterate through each string in the dataset
+    if (prefix_length == 0) {
+        std::cerr << "Error: Prefix length cannot be zero.\n";
+        return results;
+    }
+
     for (const auto& str : data) {
-        // Check if the string starts with the given prefix
         if (str.size() >= prefix_length && str.compare(0, prefix_length, prefix) == 0) {
             results.push_back(str);
         }
@@ -355,7 +359,7 @@ int main() {
             auto end1 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed1 = end1 - start1;
             
-            std::cout << "SIMD single search query time: " << elapsed1.count() << " s\n";
+            
             std::cout << "SIMD Single Query Results: ";
             for (int idx : simd_single_results) {
                 std::cout << idx << " ";
@@ -363,11 +367,11 @@ int main() {
             std::cout << std::endl;
 
             // Vanilla Single Query Test
-            std::cout << "\nTesting Vanilla Single Query for: " << query << std::endl;
             auto start2 = std::chrono::high_resolution_clock::now();
             auto vanilla_single_results = vanillaSearch(data, query);
             auto end2 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed2 = end2 - start2;
+            std::cout << "SIMD single search query time: " << elapsed1.count() << " s\n";
             std::cout << "Vanilla single search query time: " << elapsed2.count() << " s\n";
 
         }
@@ -381,7 +385,7 @@ int main() {
             auto simd_prefix_results = simdPrefixQuery(encoded_column, prefix);
             auto end3 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed3 = end3 - start3;
-            std::cout << "SIMD Prefix query time: " << elapsed3.count() << " s\n";
+            
             std::cout << "SIMD Prefix Query Results: ";
             for (const auto& result : simd_prefix_results) {
                 const std::string& dict_entry = result.first;  // Get the dictionary entry (string)
@@ -395,11 +399,11 @@ int main() {
             std::cout << std::endl;
 
             // Vanilla Prefix Query Test
-            std::cout << "\nTesting Vanilla Prefix Query for prefix: " << prefix << std::endl;
             auto start4 = std::chrono::high_resolution_clock::now();
             auto vanilla_prefix_results = vanillaPrefixQuery(data, prefix);
             auto end4 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed4 = end4 - start4;
+            std::cout << "SIMD Prefix query time: " << elapsed3.count() << " s\n";
             std::cout << "Vanilla prefix query time: " << elapsed4.count() << " s\n";
 
         }
