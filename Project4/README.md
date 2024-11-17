@@ -119,32 +119,32 @@ Functions for reading and writing data:
 ### 1. Dictionary Encoding
 Below is a demonstration of the effect of multithread dictionary encoding:
 With using 1 thread: 
-![alt text](/img/image.png)<br>
+![alt text](img/image.png)<br>
 With using 2 threads:<br>
-![alt text](/img/image-1.png) <br>
+![alt text](img/image-1.png) <br>
 With using 4 threads: <br>
-![alt text](/img/image-2.png)<br>
+![alt text](img/image-2.png)<br>
 With using 8 threads: <br>
-![alt text](/img/image-3.png)<br>
+![alt text](img/image-3.png)<br>
 With using 16 threads: <br>
-![alt text](/img/image-4.png)<br>
+![alt text](img/image-4.png)<br>
 Here is a graph of the results:<br>
-![alt text](/img/image-5.png)<br>
+![alt text](img/image-5.png)<br>
 
 In regards to dictionary encoding, it seems as though the general trend is that additional threads will decrease the encoding runtime, with diminishing returns.
 ### 2. Search Operations
 Here are a few runs of the single search operation:<br>
 Search for **pikgyaqet**
-![alt text](/img/image-6.png) <br>
+![alt text](img/image-6.png) <br>
 Search for **byasa**
-![alt text](/img/image-8.png)
+![alt text](img/image-8.png)
 Search for **bojt**
-![alt text](/img/image-9.png) <br>
+![alt text](img/image-9.png) <br>
 
 Overall, we can see that the SIMD accelerated search is far and away much more effective at finding singular items.
 ### 3. Prefix Matching
 Now running a benchmark on prefix matching, we choose an easy prefix **woci** just for a concise output.
-![alt text](/img/image-10.png) <br>
+![alt text](img/image-10.png) <br>
 Here we can see the same trend of SIMD being a faster operation than the vanilla test.
 It outputs the indices in which all matching words with the prefix **woci** occur.
 
