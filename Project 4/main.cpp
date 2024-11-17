@@ -146,33 +146,57 @@ std::vector<std::pair<std::string, std::vector<int>>> simdPrefixQuery(const Enco
         return results;
     }
 
-    __m256i prefix_vec = _mm256_set1_epi8(0); 
-    std::memcpy(&prefix_vec, prefix.c_str(), std::min(prefix_length, size_t(32))); 
+    // Load the prefix into a 256-bit SIMD register
+    __m256i prefix_vec = _mm256_setzero_si256();
+    std::memcpy(&prefix_vec, prefix.c_str(), std::min(prefix_length, size_t(32)));
 
-    for (size_t i = 0; i < encoded_column.dictionary.id_to_data.size(); ++i) {
-        const std::string& dict_entry = encoded_column.dictionary.id_to_data[i];
+    const auto& dict_entries = encoded_column.dictionary.id_to_data;
 
-        size_t dict_length = dict_entry.size();
-        if (dict_length < prefix_length) {
-            continue; 
+    // Process dictionary in batches of 8 for SIMD acceleration
+    size_t i = 0;
+    for (; i + 8 <= dict_entries.size(); i += 8) {
+        __m256i dict_vecs[8];
+
+        // Load 8 dictionary entries into SIMD registers
+        for (int j = 0; j < 8; ++j) {
+            const auto& dict_entry = dict_entries[i + j];
+            dict_vecs[j] = _mm256_setzero_si256();
+            std::memcpy(&dict_vecs[j], dict_entry.c_str(), std::min(dict_entry.size(), size_t(32)));
         }
 
-        // load current dictionary entry into SIMD 
-        __m256i dict_vec = _mm256_setzero_si256();
-        std::memcpy(&dict_vec, dict_entry.c_str(), std::min(dict_length, size_t(32)));
+        // Compare each dictionary entry with the prefix
+        for (int j = 0; j < 8; ++j) {
+            __m256i cmp = _mm256_cmpeq_epi8(prefix_vec, dict_vecs[j]);
+            int mask = _mm256_movemask_epi8(cmp);
 
-        // compare prefix and dictionary entry using SIMD
-        __m256i cmp = _mm256_cmpeq_epi8(prefix_vec, dict_vec);
-        int mask = _mm256_movemask_epi8(cmp);
+            // Check if the first `prefix_length` bytes match
+            if ((mask & ((1 << prefix_length) - 1)) == ((1 << prefix_length) - 1)) {
+                const std::string& dict_entry = dict_entries[i + j];
+                std::vector<int> indices;
 
-        // check if the first `prefix_length` bytes match
-        if ((mask & ((1 << prefix_length) - 1)) == ((1 << prefix_length) - 1)) {
+                // Find all indices where this dictionary entry appears in the encoded data
+                for (size_t k = 0; k < encoded_column.encoded_data.size(); ++k) {
+                    if (encoded_column.encoded_data[k] == static_cast<int>(i + j)) {
+                        indices.push_back(k);
+                    }
+                }
+
+                results.emplace_back(dict_entry, indices);
+            }
+        }
+    }
+
+    // Handle remaining dictionary entries (scalar processing)
+    for (; i < dict_entries.size(); ++i) {
+        const std::string& dict_entry = dict_entries[i];
+
+        if (dict_entry.size() >= prefix_length &&
+            std::memcmp(dict_entry.c_str(), prefix.c_str(), prefix_length) == 0) {
             std::vector<int> indices;
 
-            // find all indices where this dictionary entry appears in the encoded data
-            for (size_t j = 0; j < encoded_column.encoded_data.size(); ++j) {
-                if (encoded_column.encoded_data[j] == static_cast<int>(i)) {
-                    indices.push_back(j);
+            for (size_t k = 0; k < encoded_column.encoded_data.size(); ++k) {
+                if (encoded_column.encoded_data[k] == static_cast<int>(i)) {
+                    indices.push_back(k);
                 }
             }
 
@@ -185,29 +209,18 @@ std::vector<std::pair<std::string, std::vector<int>>> simdPrefixQuery(const Enco
 
 
 
+
 // prefix query with no simd
-std::vector<std::pair<std::string, std::vector<int>>> vanillaPrefixQuery(const EncodedColumn& encoded_column, const std::string& prefix) {
-    std::vector<std::pair<std::string, std::vector<int>>> results;
 
+std::vector<std::string> vanillaPrefixQuery(const std::vector<std::string>& data, const std::string& prefix) {
+    std::vector<std::string> results;
     size_t prefix_length = prefix.size();
-    if (prefix_length == 0) {
-        std::cerr << "Error: Prefix length cannot be zero.\n";
-        return results;
-    }
 
-    for (size_t i = 0; i < encoded_column.dictionary.id_to_data.size(); ++i) {
-        const std::string& dict_entry = encoded_column.dictionary.id_to_data[i];
-
-        if (dict_entry.compare(0, prefix_length, prefix) == 0) { 
-            std::vector<int> indices;
-
-            for (size_t j = 0; j < encoded_column.encoded_data.size(); ++j) {
-                if (encoded_column.encoded_data[j] == static_cast<int>(i)) {
-                    indices.push_back(j);
-                }
-            }
-
-            results.emplace_back(dict_entry, indices);
+    // Iterate through each string in the dataset
+    for (const auto& str : data) {
+        // Check if the string starts with the given prefix
+        if (str.size() >= prefix_length && str.compare(0, prefix_length, prefix) == 0) {
+            results.push_back(str);
         }
     }
 
@@ -257,26 +270,16 @@ std::vector<int> simdQuery(const EncodedColumn& encoded_column, const std::strin
 
 
 // vanilla search for singular item
-std::vector<int> vanillaSearch(const EncodedColumn& encoded_column, const std::string& query) {
-    std::vector<int> indices;
-
-    // check if the query exists in the dictionary
-    auto it = encoded_column.dictionary.data_to_id.find(query);
-    if (it == encoded_column.dictionary.data_to_id.end()) {
-        return indices; 
-    }
-
-    int query_id = it->second;
-
-    // linear scan for matching IDs in the encoded data
-    for (size_t i = 0; i < encoded_column.encoded_data.size(); ++i) {
-        if (encoded_column.encoded_data[i] == query_id) {
-            indices.push_back(i);
+std::vector<int> vanillaSearch(const std::vector<std::string>& raw_data, const std::string& query) {
+    std::vector<int> result_indices;
+    for (size_t i = 0; i < raw_data.size(); ++i) {
+        if (raw_data[i] == query) {
+            result_indices.push_back(i);
         }
     }
-
-    return indices;
+    return result_indices;
 }
+
 
 
 // File Handling
@@ -323,10 +326,11 @@ int main() {
     std::cin >> num_threads;
     auto data = readColumnFromFile(input_file);
 
-    Timer timer;
-    timer.start();
+    auto start = std::chrono::high_resolution_clock::now();
     auto encoded_column = encodeDictionary(data, num_threads);
-    std::cout << "Encoding time: " << timer.elapsed() << " ms\n";
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << "Encoding time: " << elapsed.count() << " s\n";
 
     writeEncodedColumnToFile(encoded_column, output_file);
 
@@ -346,9 +350,12 @@ int main() {
 
             // SIMD Single Query Test
             std::cout << "\nTesting SIMD Single Query for: " << query << std::endl;
-            timer.start();
+            auto start1 = std::chrono::high_resolution_clock::now();
             auto simd_single_results = simdQuery(encoded_column, query);
-            std::cout << "SIMD single search query time: " << timer.elapsed() << " ms\n";
+            auto end1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed1 = end1 - start1;
+            
+            std::cout << "SIMD single search query time: " << elapsed1.count() << " s\n";
             std::cout << "SIMD Single Query Results: ";
             for (int idx : simd_single_results) {
                 std::cout << idx << " ";
@@ -357,9 +364,11 @@ int main() {
 
             // Vanilla Single Query Test
             std::cout << "\nTesting Vanilla Single Query for: " << query << std::endl;
-            timer.start();
-            auto vanilla_single_results = vanillaSearch(encoded_column, query);
-            std::cout << "Vanilla single search query time: " << timer.elapsed() << " ms\n";
+            auto start2 = std::chrono::high_resolution_clock::now();
+            auto vanilla_single_results = vanillaSearch(data, query);
+            auto end2 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed2 = end2 - start2;
+            std::cout << "Vanilla single search query time: " << elapsed2.count() << " s\n";
 
         }
         else if (selection == "p"){
@@ -368,9 +377,11 @@ int main() {
             std::cin >> prefix;
             // SIMD Prefix Query Test
             std::cout << "\nTesting SIMD Prefix Query for prefix: " << prefix << std::endl;
-            timer.start();
+            auto start3 = std::chrono::high_resolution_clock::now();
             auto simd_prefix_results = simdPrefixQuery(encoded_column, prefix);
-            std::cout << "SIMD Prefix query time: " << timer.elapsed() << " ms\n";
+            auto end3 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed3 = end3 - start3;
+            std::cout << "SIMD Prefix query time: " << elapsed3.count() << " s\n";
             std::cout << "SIMD Prefix Query Results: ";
             for (const auto& result : simd_prefix_results) {
                 const std::string& dict_entry = result.first;  // Get the dictionary entry (string)
@@ -385,9 +396,11 @@ int main() {
 
             // Vanilla Prefix Query Test
             std::cout << "\nTesting Vanilla Prefix Query for prefix: " << prefix << std::endl;
-            timer.start();
-            auto vanilla_prefix_results = vanillaPrefixQuery(encoded_column, prefix);
-            std::cout << "Vanilla prefix query time: " << timer.elapsed() << " ms\n";
+            auto start4 = std::chrono::high_resolution_clock::now();
+            auto vanilla_prefix_results = vanillaPrefixQuery(data, prefix);
+            auto end4 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed4 = end4 - start4;
+            std::cout << "Vanilla prefix query time: " << elapsed4.count() << " s\n";
 
         }
     }
