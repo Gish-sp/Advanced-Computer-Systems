@@ -120,7 +120,7 @@ Results for compressing 11 images with 4 core multithreading:
 ## Image Quality Comparison 
 Although more qualitative that an objective runtime, we can clearly see a difference in image quality pre and post compression.
 
-Original image: 
+Original image: <br>
 ![alt text](img/image-6.png)<br>
 
 OpenCV compressed image (singlethreaded):<br>
