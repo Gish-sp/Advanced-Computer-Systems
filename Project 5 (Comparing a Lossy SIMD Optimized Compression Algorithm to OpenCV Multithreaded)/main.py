@@ -6,14 +6,12 @@ import numpy as np
 import time
 from queue import Queue
 
-
 def compress_image_single_threaded(input_path, output_path, quality=20):
     """
     Compress an image in a single thread.
     """
     img = Image.open(input_path)
     img.save(output_path, "JPEG", quality=quality)
-
 
 def compress_image_multithreaded(input_paths, output_dir, num_threads, quality=20):
     """
@@ -25,7 +23,7 @@ def compress_image_multithreaded(input_paths, output_dir, num_threads, quality=2
             if input_path is None:
                 break
             filename = os.path.basename(input_path)
-            output_path = os.path.join(output_dir, filename)
+            output_path = os.path.join(output_dir, f"threaded_{filename}")
             compress_image_single_threaded(input_path, output_path, quality)
             task_queue.task_done()
 
@@ -51,38 +49,39 @@ def compress_image_multithreaded(input_paths, output_dir, num_threads, quality=2
     for thread in threads:
         thread.join()
 
-
 def compress_image_gpu(input_path, output_path, quality=20):
     """
     Compress an image using GPU acceleration.
     """
     img = Image.open(input_path)
     img_array = np.array(img)
-    
+
     # Convert image array to CuPy array for GPU processing
     gpu_array = cp.array(img_array)
     processed_array = gpu_array * (quality / 100.0)  # Simulated compression on GPU
     processed_array = cp.clip(processed_array, 0, 255).astype(cp.uint8)
-    
+
     # Transfer back to CPU for saving
     result_array = cp.asnumpy(processed_array)
     result_image = Image.fromarray(result_array)
     result_image.save(output_path, "JPEG", quality=quality)
 
-
 if __name__ == "__main__":
-    # Example usage
-    input_image = "input.jpg"  # Replace with your image path
+    input_dir = "images"  # Input folder containing images
     output_dir = "compressed_images"
     os.makedirs(output_dir, exist_ok=True)
 
+    input_images = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.lower().endswith(('png', 'jpg', 'jpeg'))]
+
     # Single-threaded compression
     start_time = time.time()
-    compress_image_single_threaded(input_image, os.path.join(output_dir, "single_threaded.jpg"))
+    for input_image in input_images:
+        filename = os.path.basename(input_image)
+        output_path = os.path.join(output_dir, f"single_{filename}")
+        compress_image_single_threaded(input_image, output_path)
     print(f"Single-threaded compression time: {time.time() - start_time:.2f} seconds")
 
     # Multithreaded compression
-    input_images = [input_image] * 8  # Simulate compressing the same image multiple times
     num_threads = 4  # Specify the number of threads
     start_time = time.time()
     compress_image_multithreaded(input_images, output_dir, num_threads)
@@ -90,5 +89,8 @@ if __name__ == "__main__":
 
     # GPU-accelerated compression
     start_time = time.time()
-    compress_image_gpu(input_image, os.path.join(output_dir, "gpu_compressed.jpg"))
+    for input_image in input_images:
+        filename = os.path.basename(input_image)
+        output_path = os.path.join(output_dir, f"gpu_{filename}")
+        compress_image_gpu(input_image, output_path)
     print(f"GPU-accelerated compression time: {time.time() - start_time:.2f} seconds")
