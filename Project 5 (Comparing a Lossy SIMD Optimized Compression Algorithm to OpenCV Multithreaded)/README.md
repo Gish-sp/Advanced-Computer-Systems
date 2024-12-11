@@ -123,7 +123,7 @@ Although more qualitative that an objective runtime, we can clearly see a differ
 Original image: 
 ![alt text](img/image-6.png)<br>
 
-OpenCV compressed image (singlethreaded):
+OpenCV compressed image (singlethreaded):<br>
 ![alt text](img/image-8.png)<br>
 
 OpenCV compressed image (multithreaded): <br>
