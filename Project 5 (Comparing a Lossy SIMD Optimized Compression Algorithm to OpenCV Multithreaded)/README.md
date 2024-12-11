@@ -126,11 +126,11 @@ Original image:
 OpenCV compressed image (singlethreaded):
 ![alt text](img/image-8.png)<br>
 
-OpenCV compressed image (multithreaded): 
+OpenCV compressed image (multithreaded): <br>
 ![alt text](img/image-7.png) <br>
 
 Custom compressed image (SIMD): <br>
-<img src="img/image-9.png" alt="Alt Text" width="1000" height="450"><br>
+<img src="img/image-9.png" alt="Alt Text" width="800" height="500"><br>
 
 Custom compressed image (GPU): <br>
 ![alt text](img/image-10.png)
